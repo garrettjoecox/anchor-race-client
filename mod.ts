@@ -1,6 +1,8 @@
 import { writeAll } from "https://deno.land/std@0.192.0/streams/write_all.ts";
 import { readLines } from "https://deno.land/std@0.193.0/io/read_lines.ts";
-import cvars from "./shipofharkinian.json" assert { type: "json" };
+
+const sohConfigString = await Deno.readTextFile("./shipofharkinian.json");
+const sohConfig = JSON.parse(sohConfigString);
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -214,7 +216,7 @@ client.sendPacket({
     name: "HOST",
     clientVersion: "Anchor Race Build 1",
     seed: config.seed,
-    config: cvars.CVars,
+    config: sohConfig.CVars,
   },
 });
 
