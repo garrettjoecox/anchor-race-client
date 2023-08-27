@@ -3,6 +3,15 @@ import { readLines } from "https://deno.land/std@0.193.0/io/read_lines.ts";
 
 const sohConfigString = await Deno.readTextFile("./shipofharkinian.json");
 const sohConfig = JSON.parse(sohConfigString);
+const flattenObject = (obj: Record<string, any>, prefix = "") =>
+  Object.keys(obj).reduce((acc, k) => {
+    const pre = prefix.length ? prefix + "." : "";
+    if (typeof obj[k] === "object") {
+      Object.assign(acc, flattenObject(obj[k], pre + k));
+    } else acc[pre + k] = obj[k];
+    return acc;
+  }, {} as Record<string, any>);
+const sohCVars = flattenObject(sohConfig.CVars);
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -22,8 +31,7 @@ interface UpdateClientDataPacket extends BasePacket {
 }
 
 interface SetConfigPacket extends BasePacket {
-  type: "SET_CONFIG";
-  data: Record<string, any>;
+  type: "RESET";
 }
 
 interface AllClientDataPacket extends BasePacket {
@@ -109,14 +117,58 @@ class Client {
     try {
       const packetString = decoder.decode(packet);
       const packetObject: Packet = JSON.parse(packetString);
-      packetObject.clientId = this.id;
 
       if (!packetObject.quiet) {
         this.log(`-> ${packetObject.type} packet`);
       }
 
-      if (packetObject.type === "UPDATE_CLIENT_DATA") {
-        this.data = packetObject.data;
+      switch (packetObject.type) {
+        case "UPDATE_CLIENT_DATA": {
+          if (!this.data[packetObject.clientId!]) {
+            // New client, reset if they have a save loaded
+            if (packetObject.data.fileNum !== 255) {
+              this.sendPacket({
+                type: "SERVER_MESSAGE",
+                message: "Can't connect with save loaded, resetting",
+                targetClientId: packetObject.clientId,
+              })
+                .finally(() =>
+                  this.sendPacket({
+                    type: "RESET",
+                    targetClientId: packetObject.clientId,
+                  })
+                );
+            }
+          } else {
+            // Existing client, reset if they load into the wrong seed
+            if (
+              packetObject.data.fileNum !== 255 &&
+              packetObject.data.seed !== config.seed
+            ) {
+              this.sendPacket({
+                type: "SERVER_MESSAGE",
+                message: "Wrong seed loaded, resetting",
+                targetClientId: packetObject.clientId,
+              })
+                .finally(() =>
+                  this.sendPacket({
+                    type: "RESET",
+                    targetClientId: packetObject.clientId,
+                  })
+                );
+            }
+          }
+          this.data[packetObject.clientId!] = packetObject.data;
+          break;
+        }
+        case "ALL_CLIENT_DATA": {
+          packetObject.clients.forEach(({ clientId, ...data }) => {
+            if (this.data[clientId]) {
+              this.data[clientId] = data;
+            }
+          });
+          break;
+        }
       }
     } catch (error) {
       this.log(`Error handling packet: ${error.message}`);
@@ -216,7 +268,7 @@ client.sendPacket({
     name: "HOST",
     clientVersion: "Anchor Race Build 1",
     seed: config.seed,
-    config: sohConfig.CVars,
+    config: sohCVars,
   },
 });
 
@@ -233,6 +285,12 @@ client.sendPacket({
   help: Show this help message`,
           );
           break;
+        }
+        case "reset": {
+          client.sendPacket({
+            type: "RESET",
+            roomId: config.room,
+          });
         }
       }
     }
